@@ -19,14 +19,32 @@ $(function () {
     return $("#gemini-key-input").val().trim();
   }
 
-  function csrfToken() {
-    const match = document.cookie.match(/csrftoken=([^;]+)/);
-    return match ? match[1] : "";
-  }
-
-  function appendMessage(role, text, meta, isError) {
+  function appendMessage(role, text, meta, isError, code) {
     const cls = "msg " + role + (isError ? " error" : "");
-    const $msg = $("<div>").addClass(cls).text(text);
+    const $msg = $("<div>").addClass(cls);
+
+    if (role === "user") {
+      $msg.text(text);
+    } else {
+      const $body = $("<div>").addClass("msg-body");
+      if (typeof marked !== "undefined" && typeof marked.parse === "function") {
+        $body.html(marked.parse(text));
+      } else {
+        $body.text(text);
+      }
+      $msg.append($body);
+
+      if (code) {
+        const $codeBox = $(`
+          <details class="code-details">
+            <summary>View Pandas Code</summary>
+            <pre><code>${$("<div/>").text(code).html()}</code></pre>
+          </details>
+        `);
+        $msg.append($codeBox);
+      }
+    }
+
     if (meta) {
       $msg.append($("<span>").addClass("meta").text(meta));
     }
@@ -93,7 +111,7 @@ $(function () {
     appendMessage("user", question);
     $("#question-input").val("");
     $("#ask-btn, #question-input").prop("disabled", true);
-    appendMessage("agent", "Thinking...", null, false);
+    appendMessage("agent", "Thinking and analyzing...", null, false);
 
     $.ajax({
       url: "/api/ask/",
@@ -103,7 +121,7 @@ $(function () {
       success: function (resp) {
         $("#messages .msg.agent").last().remove();
         const meta = "attempts: " + resp.attempts + " | status: " + resp.status;
-        appendMessage("agent", resp.answer, meta, resp.status !== "ok");
+        appendMessage("agent", resp.answer, meta, resp.status !== "ok", resp.code);
       },
       error: function (xhr) {
         $("#messages .msg.agent").last().remove();

@@ -139,8 +139,9 @@ GEMINI_FALLBACK_MODELS = [
         "GEMINI_FALLBACK_MODELS", "gemini-3.1-flash-lite,gemini-3.5-flash-lite"
     ).split(",") if m.strip()
 ]
-MAX_CODEGEN_RETRIES = 2
-SANDBOX_TIMEOUT_SECONDS = 10
+MAX_CODEGEN_RETRIES = 3
+SANDBOX_TIMEOUT_SECONDS = 15
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 # Email

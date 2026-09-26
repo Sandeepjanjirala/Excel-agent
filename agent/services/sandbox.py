@@ -1,16 +1,18 @@
 """
 Restricted execution sandbox for LLM-generated pandas code.
 
-We never trust Gemini's *answer* directly for numbers - we trust its
-*code*, and only after that code passes an AST safety check do we run it,
-with no filesystem/network/import access, against the real dataframe(s).
+We validate the AST, allow safe mathematical and data operations, allow safe
+standard imports (pandas, numpy, math, re, datetime), auto-assign the result to
+`answer` if a bare expression is returned, and execute within process isolation.
 """
 from __future__ import annotations
 
 import ast
 import builtins
+import datetime
 import math
 import multiprocessing
+import re
 import numpy as np
 import pandas as pd
 
@@ -23,14 +25,6 @@ def _json_safe(obj):
     """
     Recursively convert a pandas/numpy result into something that survives a
     real round-trip through json.dumps() + the browser's JSON.parse().
-
-    Two things break that round-trip if left alone:
-      - float('nan') / float('inf') - Python's json module writes these as
-        the bare literals NaN/Infinity by default, which are NOT valid JSON
-        and make JSON.parse() throw in the browser (this looks like "the
-        server returned 200 but the request still failed").
-      - Non-string dict keys (e.g. a tuple key from a multi-column groupby,
-        or a numpy scalar key) - JSON object keys must be strings.
     """
     if isinstance(obj, dict):
         return {str(k): _json_safe(v) for k, v in obj.items()}
@@ -46,9 +40,8 @@ def _json_safe(obj):
     return obj
 
 
-# Node types we are willing to execute. Anything else (Import, With, Global,
-# Lambda-that-calls-dunders, etc. are still checked further below) is rejected.
-_ALLOWED_NODES = (
+# Node types allowed in execution.
+_ALLOWED_NODES_LIST = [
     ast.Module, ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign,
     ast.Load, ast.Store, ast.Del,
     ast.Name, ast.Attribute, ast.Subscript, ast.Index, ast.Slice,
@@ -60,12 +53,26 @@ _ALLOWED_NODES = (
     ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.In, ast.NotIn, ast.Is, ast.IsNot,
     ast.List, ast.Tuple, ast.Dict, ast.Set,
     ast.Constant,
-    ast.If, ast.For, ast.While, ast.Break, ast.Continue, ast.Pass,
+    ast.If, ast.IfExp, ast.For, ast.While, ast.Break, ast.Continue, ast.Pass,
     ast.FunctionDef, ast.Return, ast.Lambda, ast.arguments, ast.arg,
     ast.ListComp, ast.DictComp, ast.SetComp, ast.GeneratorExp, ast.comprehension,
     ast.JoinedStr, ast.FormattedValue,
     ast.Starred,
-)
+    ast.Try, ast.ExceptHandler,
+    ast.alias, ast.Import, ast.ImportFrom,
+]
+
+# Conditionally add modern Python AST nodes if available
+for node_name in ("NamedExpr", "Match", "match_case", "MatchValue", "MatchAs"):
+    if hasattr(ast, node_name):
+        _ALLOWED_NODES_LIST.append(getattr(ast, node_name))
+
+_ALLOWED_NODES = tuple(_ALLOWED_NODES_LIST)
+
+_SAFE_MODULES = {
+    "pandas", "pd", "numpy", "np", "math", "re", "datetime",
+    "collections", "itertools", "functools",
+}
 
 _FORBIDDEN_NAMES = {
     "__import__", "eval", "exec", "compile", "open", "input",
@@ -73,6 +80,25 @@ _FORBIDDEN_NAMES = {
     "__builtins__", "__loader__", "__spec__", "os", "sys", "subprocess",
     "socket", "shutil", "pathlib", "importlib",
 }
+
+
+def _auto_assign_answer(code: str) -> str:
+    """If code ends with a bare expression and doesn't assign to `answer`, assign it to `answer`."""
+    try:
+        tree = ast.parse(code, mode="exec")
+        if not tree.body:
+            return code
+        last_stmt = tree.body[-1]
+        if isinstance(last_stmt, ast.Expr):
+            tree.body[-1] = ast.Assign(
+                targets=[ast.Name(id="answer", ctx=ast.Store())],
+                value=last_stmt.value
+            )
+            ast.fix_missing_locations(tree)
+            return ast.unparse(tree)
+    except Exception:
+        pass
+    return code
 
 
 def _validate_ast(code: str) -> ast.AST:
@@ -85,8 +111,17 @@ def _validate_ast(code: str) -> ast.AST:
         if not isinstance(node, _ALLOWED_NODES):
             raise UnsafeCodeError(f"Disallowed syntax: {type(node).__name__}")
 
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            raise UnsafeCodeError("Imports are not allowed")
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root_module = alias.name.split(".")[0]
+                if root_module not in _SAFE_MODULES:
+                    raise UnsafeCodeError(f"Importing '{alias.name}' is not allowed.")
+
+        if isinstance(node, ast.ImportFrom):
+            if node.module:
+                root_module = node.module.split(".")[0]
+                if root_module not in _SAFE_MODULES:
+                    raise UnsafeCodeError(f"Importing from '{node.module}' is not allowed.")
 
         name = None
         if isinstance(node, ast.Name):
@@ -106,27 +141,37 @@ _SAFE_BUILTINS = {
         "abs", "all", "any", "bool", "dict", "enumerate", "float", "int",
         "len", "list", "max", "min", "range", "round", "set", "sorted",
         "str", "sum", "tuple", "zip", "print", "isinstance", "type",
+        "map", "filter", "divmod", "pow", "repr", "iter", "next",
     )
+    if hasattr(builtins, name)
 }
 
 
 def _run_in_process(code: str, dataframes: dict, result_queue):
     try:
-        _validate_ast(code)
+        prepared_code = _auto_assign_answer(code)
+        _validate_ast(prepared_code)
         safe_globals = {
             "__builtins__": _SAFE_BUILTINS,
             "pd": pd,
             "np": np,
+            "math": math,
+            "re": re,
+            "datetime": datetime,
+            "pandas": pd,
+            "numpy": np,
         }
-        # `dataframes` keys are already safe, unique variable names assigned
-        # at upload time (see excel_parser.build_batch) - one per sheet,
-        # across every file in the batch. Exposed as-is, plus `df` as a
-        # convenience alias when the whole batch is just one sheet.
         safe_locals = {name: df.copy() for name, df in dataframes.items()}
         if len(dataframes) == 1:
             safe_locals["df"] = next(iter(safe_locals.values())).copy()
 
-        exec(code, safe_globals, safe_locals)
+        exec(prepared_code, safe_globals, safe_locals)
+
+        if "answer" not in safe_locals:
+            for fallback_key in ("result", "ans", "res", "output", "final"):
+                if fallback_key in safe_locals:
+                    safe_locals["answer"] = safe_locals[fallback_key]
+                    break
 
         if "answer" not in safe_locals:
             raise UnsafeCodeError(
@@ -134,15 +179,18 @@ def _run_in_process(code: str, dataframes: dict, result_queue):
             )
         result = safe_locals["answer"]
 
-        # Make the result JSON/text friendly (DataFrame/Series -> dict, then
-        # recursively strip NaN/Infinity/non-str-keys so it survives an
-        # actual JSON round-trip to the browser).
-        if isinstance(result, (pd.DataFrame, pd.Series)):
+        # Make DataFrames and Series clean and JSON-serializable
+        if isinstance(result, pd.Series):
             result = result.to_dict()
-        result = _json_safe(result)
+        elif isinstance(result, pd.DataFrame):
+            if len(result) <= 200:
+                result = result.to_dict(orient="records")
+            else:
+                result = result.head(200).to_dict(orient="records")
 
+        result = _json_safe(result)
         result_queue.put(("ok", result))
-    except Exception as e:  # noqa: BLE001 - deliberately broad, isolated process
+    except Exception as e:
         result_queue.put(("error", f"{type(e).__name__}: {e}"))
 
 
@@ -150,14 +198,7 @@ def run_pandas_snippet(code: str, dataframes: dict, timeout: int = 10):
     """
     Execute `code` in an isolated subprocess with restricted builtins and
     an AST safety check. `dataframes` maps sheet_name -> DataFrame.
-
-    The snippet MUST set a variable called `answer`.
-    Returns (status, value) where status is "ok" or "error".
     """
-    # "fork" avoids re-importing/re-executing the parent's __main__ module
-    # (which "spawn" does, and which is fragile under things like
-    # `manage.py runserver`, Gunicorn, or `python -c`). Fork is available
-    # on Linux/macOS, which covers typical Django deployment targets.
     try:
         ctx = multiprocessing.get_context("fork")
     except ValueError:

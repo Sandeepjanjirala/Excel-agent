@@ -119,6 +119,15 @@ def ask_question(request):
     with open(pkl_path, "rb") as f:
         var_map = pickle.load(f)
 
+    # Fetch recent conversation history for this project BEFORE saving current question
+    past_messages = ChatMessage.objects.filter(project=project).order_by("-created_at")[:6]
+    history_lines = []
+    for m in reversed(list(past_messages)):
+        history_lines.append(f"{m.role.upper()}: {m.content}")
+        if m.code_used:
+            history_lines.append(f"[Code used previously]:\n{m.code_used}")
+    chat_history_text = "\n".join(history_lines) if history_lines else None
+
     ChatMessage.objects.create(project=project, role="user", content=question)
 
     try:
@@ -127,6 +136,7 @@ def ask_question(request):
             schema_text=project.schema_text,
             business_rules_text=project.business_rules_text,
             dataframes=var_map,
+            chat_history_text=chat_history_text,
             api_key=user_api_key,
         )
     except Exception as e:

@@ -1,18 +1,6 @@
 """
-Thin wrapper around the Gemini API (google-genai SDK).
-
-Two calls are used:
-  1. generate_pandas_code() - question + schema + business rules -> a pandas snippet
-  2. phrase_answer()        - the raw computed result -> a natural-language reply
-
-Both accept an optional `api_key`. If the frontend supplies one (a user's own
-Gemini key, kept in their own browser), it is used only for that request and
-never written to the database or logs. If none is supplied, we fall back to
-the server's own GEMINI_API_KEY from settings/.env.
-
-Both also retry across a small fallback chain of models
-(settings.GEMINI_MODEL, then settings.GEMINI_FALLBACK_MODELS) so a transient
-503/429 "model overloaded" error on one model doesn't fail the whole request.
+Wrapper around the Gemini API (google-genai SDK) with multi-model fallback,
+rich conversational context, intelligent data-analysis prompting, and reflection support.
 """
 from __future__ import annotations
 
@@ -20,15 +8,11 @@ import time
 from django.conf import settings
 from google import genai
 
-# Substrings that indicate a *transient* error worth retrying / falling back
-# on, as opposed to a real problem (bad prompt, bad API key, model genuinely
-# doesn't exist) that retrying won't fix.
 _TRANSIENT_MARKERS = (
     "503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED",
-    "overloaded", "rate limit", "quota",
+    "overloaded", "rate limit", "quota", "not found", "404",
 )
 
-# Small per-model retry before giving up on that model and moving to the next.
 _RETRIES_PER_MODEL = 2
 _BACKOFF_SECONDS = (1, 3)
 
@@ -38,8 +22,11 @@ class GeminiUnavailableError(RuntimeError):
 
 
 def _model_chain() -> list[str]:
-    chain = [settings.GEMINI_MODEL] + list(settings.GEMINI_FALLBACK_MODELS)
-    # de-dupe while preserving order
+    configured = [settings.GEMINI_MODEL] + list(settings.GEMINI_FALLBACK_MODELS)
+    # Include standard stable fallbacks to ensure high availability
+    standard_fallbacks = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    chain = configured + standard_fallbacks
+
     seen = set()
     ordered = []
     for m in chain:
@@ -61,8 +48,6 @@ def _get_client(api_key: str | None):
             "No Gemini API key available. Either set GEMINI_API_KEY in your "
             "server's .env file, or enter your own key in the app (top of the page)."
         )
-    # A fresh client per call is cheap and lets us support a different key
-    # per request safely (no cross-user caching of credentials).
     return genai.Client(api_key=key)
 
 
@@ -74,46 +59,58 @@ def _generate_with_fallback(prompt: str, api_key: str | None) -> str:
         for attempt in range(_RETRIES_PER_MODEL):
             try:
                 response = client.models.generate_content(model=model, contents=prompt)
-                return response.text
-            except Exception as e:  # noqa: BLE001 - we re-classify below
+                if response and response.text:
+                    return response.text
+            except Exception as e:
                 last_error = e
                 if not _is_transient(e):
-                    break  # don't bother retrying a non-transient error on this model
+                    break
                 if attempt < _RETRIES_PER_MODEL - 1:
                     time.sleep(_BACKOFF_SECONDS[min(attempt, len(_BACKOFF_SECONDS) - 1)])
-        # move on to the next model in the chain
 
     raise GeminiUnavailableError(
         f"All configured Gemini models are currently unavailable. Last error: {last_error}"
     )
 
 
-CODEGEN_SYSTEM_PROMPT = """You are a data analyst that writes short, correct pandas code
-to answer a user's question about a batch of uploaded Excel files.
+CODEGEN_SYSTEM_PROMPT = """You are a senior data analyst and expert pandas programmer.
+Your job is to write short, 100% correct, and robust pandas code to answer questions about uploaded Excel spreadsheets.
 
-Rules you MUST follow:
-- Output ONLY a python code block. No prose before or after.
-- Do not import anything. `pd` (pandas) and `np` (numpy) are already available.
-- The dataframe(s) are already available as local variables - one per sheet,
-  across every uploaded file (see the schema below, which shows each file's
-  sheets and the *exact* pandas variable name for each one). If the whole
-  batch is a single sheet, it is also available as `df`.
-- The uploaded files are NOT guaranteed to share the same schema. Before
-  writing code that combines more than one file's variable (e.g. pd.concat,
-  a join, or comparing values across them), check that their columns
-  actually match in the schema below. If a question implies "all files" or
-  "every branch" but the files have different columns, do the best
-  reasonable thing (e.g. use only the columns they have in common, or
-  process each file separately and combine the results) rather than
-  guessing a column that isn't there.
-- Assign your final result to a variable named exactly `answer`.
-  `answer` can be a number, a string, a dict, a list, or a small DataFrame/Series.
-- Never invent column names - use only the exact column names given in the schema.
-- The business rules / metadata note below (if any) was written once for the
-  whole batch and may not describe every file exactly - apply it where it
-  clearly fits, but don't force it onto a file whose structure disagrees
-  with it.
-- Keep the code short and deterministic. No randomness, no plotting, no file I/O.
+CRITICAL RULES FOR 100% ACCURACY:
+1. OUTPUT FORMAT:
+   - Output ONLY a python code block (```python ... ```). No commentary before or after.
+   - Do not import `os`, `sys`, or unsafe modules. Standard data modules (`pd`, `np`, `re`, `math`, `datetime`) are already imported and available.
+   - The dataframes are pre-loaded into local variables matching the exact names given in the schema below. If only 1 sheet exists, it is also available as `df`.
+   - You MUST assign the final computed result to a variable named `answer`.
+
+2. STRING MATCHING & CASE INSENSITIVITY:
+   - Real-world Excel sheets frequently have inconsistent casing or trailing spaces.
+   - When filtering or searching on text columns (e.g. branch names, zones, AGM/RI names, statuses, categories):
+     ALWAYS strip whitespace and use case-insensitive matching:
+     Example: `df[df['Branch'].astype(str).str.strip().str.lower() == 'adibatla'.lower()]`
+     Or for substring: `df[df['Branch'].astype(str).str.contains('adibatla', case=False, na=False)]`
+   - NEVER do strict exact case comparisons like `df['Branch'] == 'ADIBATLA'` without `.str.strip().str.lower()`.
+
+3. DATA PROFILING & DISTINCT VALUES:
+   - Inspect the 'Columns & Data Profiles' in the schema below! For categorical columns, the exact distinct values are explicitly listed.
+   - Match against those exact values (e.g., if asking for "non-ac", check the profile to see if the value is `'Non-AC'` or `'Non - AC'`).
+
+4. MULTI-TABLE JOINS:
+   - When combining tables across files, identify the shared entity identifier (such as `'Branch'`).
+   - Merge ONLY on the primary entity key (e.g. `pd.merge(table_a, table_b, on='Branch', how='left')`).
+   - DO NOT merge on multiple auxiliary columns (e.g. `on=['Branch', 'AGM Name', 'Zone']`) unless strictly required, because minor spelling/formatting differences in auxiliary columns across files will drop valid rows.
+   - Prefer `how='left'` or `how='outer'` so records are not silently lost.
+
+5. NUMBER & PERCENTAGE PARSING:
+   - Numbers in Excel can sometimes be formatted as strings with currency signs (₹, $), commas (1,000), or percent signs (15%).
+   - If computing sums/averages on an object column that contains numbers, convert with:
+     `pd.to_numeric(df['col'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce')`
+
+6. CONVERSATION CONTEXT & FOLLOW-UPS:
+   - If conversation history is provided, resolve pronouns like "they", "those", "which ones", or "sort that" by referring to the previous questions and answers.
+
+7. KEEP IT DETERMINISTIC & CLEAN:
+   - No randomness, no plotting, no file writes.
 """
 
 
@@ -121,10 +118,11 @@ def _extract_code_block(text: str) -> str:
     if "```" not in text:
         return text.strip()
     parts = text.split("```")
-    # parts[1] is usually like "python\n<code>"
     block = parts[1]
     if block.startswith("python"):
         block = block[len("python"):]
+    elif block.startswith("py"):
+        block = block[len("py"):]
     return block.strip()
 
 
@@ -133,54 +131,93 @@ def generate_pandas_code(
     schema_text: str,
     business_rules_text: str,
     available_vars: list[str],
+    chat_history_text: str | None = None,
     previous_error: str | None = None,
     previous_code: str | None = None,
+    reflection_feedback: str | None = None,
     api_key: str | None = None,
 ) -> str:
-    prompt = f"""{CODEGEN_SYSTEM_PROMPT}
+    prompt_parts = [
+        CODEGEN_SYSTEM_PROMPT,
+        "",
+        f"Available variables: {', '.join(available_vars)}",
+        "",
+        "Workbook schema:",
+        schema_text,
+        "",
+        "Business rules / column meanings (if provided):",
+        business_rules_text or "(none provided)",
+        "",
+    ]
 
-Available variables: {', '.join(available_vars)}
+    if chat_history_text:
+        prompt_parts.extend([
+            "Recent conversation history:",
+            chat_history_text,
+            "",
+        ])
 
-Workbook schema:
-{schema_text}
+    prompt_parts.extend([
+        f"Current user question: {question}",
+    ])
 
-Business rules / column meanings (may be blank if none were provided):
-{business_rules_text or '(none provided)'}
+    if reflection_feedback and previous_code:
+        prompt_parts.extend([
+            "",
+            "CRITICAL SELF-CORRECTION FEEDBACK:",
+            f"Your previous attempt produced an invalid or empty result: {reflection_feedback}",
+            "Previous code:",
+            f"```python\n{previous_code}\n```",
+            "Please fix the logic, check casing/whitespace (.str.strip().str.lower()), or adjust join keys.",
+        ])
+    elif previous_error and previous_code:
+        prompt_parts.extend([
+            "",
+            "Your previous attempt threw an error. Fix it:",
+            "Previous code:",
+            f"```python\n{previous_code}\n```",
+            f"Error: {previous_error}",
+        ])
 
-User question: {question}
-"""
-
-    if previous_error and previous_code:
-        prompt += f"""
-
-Your previous attempt failed. Fix it.
-Previous code:
-```python
-{previous_code}
-```
-Error:
-{previous_error}
-"""
-
+    prompt = "\n".join(prompt_parts)
     text = _generate_with_fallback(prompt, api_key)
     return _extract_code_block(text)
 
 
-def phrase_answer(question: str, raw_result, code_used: str, api_key: str | None = None) -> str:
-    prompt = f"""A user asked this question about their Excel data:
-"{question}"
+def phrase_answer(
+    question: str,
+    raw_result,
+    code_used: str,
+    chat_history_text: str | None = None,
+    api_key: str | None = None,
+) -> str:
+    prompt_parts = [
+        "A user asked this question about their Excel data:",
+        f'"{question}"',
+        "",
+    ]
+    if chat_history_text:
+        prompt_parts.extend([
+            "Recent conversation history:",
+            chat_history_text,
+            "",
+        ])
 
-The following pandas code was executed against the real data and produced this result:
-Code:
-```python
-{code_used}
-```
-Result: {raw_result}
+    prompt_parts.extend([
+        "The following pandas code was executed against the real data and produced this result:",
+        "Code:",
+        f"```python\n{code_used}\n```",
+        f"Computed Result: {raw_result}",
+        "",
+        "Task: Write a clear, natural-language, professional answer to the user's question using this result.",
+        "Rules:",
+        "- State the actual numbers/names from the result accurately.",
+        "- If the result is a list or table, format it clearly using Markdown tables or bullet points.",
+        "- Do not make up any numbers not in the result.",
+        "- Do not mention that you ran pandas code or are an AI.",
+        "- Keep the answer direct and informative.",
+    ])
 
-Write a short, natural-language answer to the user's question using this result.
-State the actual numbers/names from the result. Do not add caveats about being
-an AI. Do not repeat the code. 1-3 sentences unless the result is a list/table,
-in which case format it clearly.
-"""
+    prompt = "\n".join(prompt_parts)
     text = _generate_with_fallback(prompt, api_key)
     return text.strip()

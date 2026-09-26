@@ -1,66 +1,244 @@
 * { box-sizing: border-box; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   background: #f5f5f4;
   color: #2a2a28;
   margin: 0;
+  line-height: 1.5;
 }
-.wrap { max-width: 760px; margin: 0 auto; padding: 32px 16px 80px; }
-h1 { font-size: 1.6rem; margin-bottom: 4px; }
-.sub { color: #6b6b68; margin-top: 0; margin-bottom: 24px; }
+.wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 16px 80px;
+}
+h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #1c1917;
+  margin-bottom: 6px;
+}
+.sub {
+  color: #6b6b68;
+  font-size: 0.95rem;
+  margin-top: 0;
+  margin-bottom: 24px;
+}
 
 .upload-card, .chat-card {
-  background: #fff;
+  background: #ffffff;
   border: 1px solid #e5e3df;
   border-radius: 12px;
-  padding: 20px;
-  margin-bottom: 20px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 .file-label {
   display: block;
-  font-size: 0.85rem;
+  font-size: 0.88rem;
   font-weight: 600;
-  margin-bottom: 14px;
-  color: #4a4a47;
+  margin-bottom: 16px;
+  color: #44403c;
 }
-.file-label input { display: block; margin-top: 6px; }
-.file-label .hint { display: block; font-weight: 400; font-size: 0.75rem; color: #8a8783; margin-top: 4px; }
-.file-label .hint a { color: #c15f3c; }
-#gemini-key-input { width: 100%; max-width: 420px; padding: 7px 10px; border-radius: 6px; border: 1px solid #d8d5cf; }
+.file-label input[type="file"] {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.85rem;
+}
+.file-label .hint {
+  display: block;
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: #78716c;
+  margin-top: 4px;
+}
+.file-label .hint a {
+  color: #c15f3c;
+  text-decoration: underline;
+}
+#gemini-key-input {
+  width: 100%;
+  max-width: 440px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid #d6d3d1;
+  font-size: 0.9rem;
+  display: block;
+  margin-top: 6px;
+}
+#gemini-key-input:focus, #question-input:focus {
+  outline: none;
+  border-color: #c15f3c;
+  box-shadow: 0 0 0 2px rgba(193, 95, 60, 0.2);
+}
+
 button {
   background: #c15f3c;
-  color: #fff;
+  color: #ffffff;
   border: none;
   border-radius: 8px;
-  padding: 10px 18px;
+  padding: 10px 20px;
   font-size: 0.9rem;
+  font-weight: 600;
   cursor: pointer;
+  transition: background-color 0.15s ease-in-out;
 }
-button:disabled { background: #d8d5cf; cursor: not-allowed; }
-#upload-status { margin-top: 12px; font-size: 0.85rem; white-space: pre-wrap; }
+button:hover:not(:disabled) {
+  background: #aa4d2c;
+}
+button:disabled {
+  background: #d6d3d1;
+  cursor: not-allowed;
+}
+
+#upload-status {
+  margin-top: 14px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: #292524;
+  white-space: pre-wrap;
+}
+#file-list {
+  padding-left: 20px;
+  margin-top: 10px;
+  font-size: 0.85rem;
+  color: #44403c;
+}
+#file-list li.error {
+  color: #dc2626;
+}
 
 #schema-preview {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.8rem;
-  color: #6b6b68;
-  background: #faf9f7;
+  color: #44403c;
+  background: #fafaf9;
+  border: 1px solid #e7e5e4;
   border-radius: 8px;
-  padding: 10px 12px;
-  margin-bottom: 14px;
-  max-height: 140px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  max-height: 180px;
   overflow-y: auto;
+  white-space: pre-wrap;
 }
-#messages { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; max-height: 420px; overflow-y: auto; }
-.msg { padding: 10px 14px; border-radius: 10px; max-width: 85%; font-size: 0.92rem; line-height: 1.4; }
-.msg.user { align-self: flex-end; background: #c15f3c; color: #fff; }
-.msg.agent { align-self: flex-start; background: #f0efec; color: #2a2a28; }
-.msg.agent.error { background: #fbe8e4; color: #8a2f1f; }
-.msg .meta { display: block; font-size: 0.7rem; opacity: 0.7; margin-top: 4px; }
 
-.input-row { display: flex; gap: 8px; }
+#messages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 18px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.msg {
+  padding: 12px 16px;
+  border-radius: 12px;
+  max-width: 90%;
+  font-size: 0.93rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.msg.user {
+  align-self: flex-end;
+  background: #c15f3c;
+  color: #ffffff;
+  border-bottom-right-radius: 3px;
+}
+.msg.agent {
+  align-self: flex-start;
+  background: #f5f5f4;
+  color: #1c1917;
+  border-bottom-left-radius: 3px;
+  border: 1px solid #e7e5e4;
+}
+.msg.agent.error {
+  background: #fef2f2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+
+.msg-body p {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+.msg-body p:last-child {
+  margin-bottom: 0;
+}
+.msg-body ul, .msg-body ol {
+  margin: 6px 0;
+  padding-left: 24px;
+}
+.msg-body li {
+  margin-bottom: 4px;
+}
+
+/* Beautiful Markdown Tables */
+.msg-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 0.85rem;
+  background: #ffffff;
+  border: 1px solid #d6d3d1;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.msg-body th, .msg-body td {
+  border: 1px solid #e7e5e4;
+  padding: 8px 12px;
+  text-align: left;
+}
+.msg-body th {
+  background: #f5f5f4;
+  font-weight: 600;
+  color: #44403c;
+}
+.msg-body tr:nth-child(even) td {
+  background: #fafaf9;
+}
+
+/* Code toggle */
+.code-details {
+  margin-top: 10px;
+  border-top: 1px dashed #d6d3d1;
+  padding-top: 8px;
+  font-size: 0.8rem;
+}
+.code-details summary {
+  cursor: pointer;
+  color: #57534e;
+  font-weight: 600;
+  user-select: none;
+}
+.code-details summary:hover {
+  color: #c15f3c;
+}
+.code-details pre {
+  margin-top: 6px;
+  background: #1c1917;
+  color: #f5f5f4;
+  padding: 10px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.82rem;
+}
+
+.msg .meta {
+  display: block;
+  font-size: 0.72rem;
+  color: #78716c;
+  margin-top: 6px;
+}
+
+.input-row {
+  display: flex;
+  gap: 10px;
+}
 #question-input {
   flex: 1;
-  padding: 10px 12px;
+  padding: 11px 14px;
   border-radius: 8px;
-  border: 1px solid #d8d5cf;
-  font-size: 0.9rem;
+  border: 1px solid #d6d3d1;
+  font-size: 0.92rem;
 }
