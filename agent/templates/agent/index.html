@@ -1,0 +1,47 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Excel Agent</title>
+  <link rel="stylesheet" href="{% static 'agent/css/style.css' %}">
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Excel Agent</h1>
+    <p class="sub">Upload one or more Excel files (they don't need to share the same layout), optionally with one shared Markdown file of notes / business rules, then ask questions across all of them.</p>
+
+    <div class="upload-card" id="upload-card">
+      <label class="file-label">
+        Your Gemini API key (optional)
+        <input type="password" id="gemini-key-input" placeholder="Leave blank to use this server's default key">
+        <span class="hint">Stored only in your browser (localStorage) and sent with your own questions - never saved on the server or shown to other users. Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</span>
+      </label>
+
+      <label class="file-label">
+        Excel files (.xlsx) — select as many as you need
+        <input type="file" id="excel-files" accept=".xlsx,.xls" multiple>
+      </label>
+      <label class="file-label">
+        Shared metadata / business rules (.md) — optional, applies loosely across all files
+        <input type="file" id="metadata-file" accept=".md,.txt">
+      </label>
+      <button id="upload-btn">Upload &amp; Parse</button>
+      <div id="upload-status"></div>
+      <ul id="file-list"></ul>
+    </div>
+
+    <div class="chat-card" id="chat-card" style="display:none;">
+      <div id="schema-preview"></div>
+      <div id="messages"></div>
+      <div class="input-row">
+        <input type="text" id="question-input" placeholder="Ask a question about your data..." disabled>
+        <button id="ask-btn" disabled>Ask</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="{% static 'agent/js/chat.js' %}"></script>
+</body>
+</html>
