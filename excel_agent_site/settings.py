@@ -128,6 +128,14 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / "media"
 MEDIA_ROOT.mkdir(exist_ok=True)
 
+# --- Media & Session Lifecycle / Retention Settings ---
+# Data older than MEDIA_RETENTION_HOURS (default: 12 hours) will be automatically pruned.
+MEDIA_RETENTION_HOURS = int(os.environ.get("MEDIA_RETENTION_HOURS", 12))
+# How often (in minutes) the background auto-cleaner checks for expired sessions
+MEDIA_CLEANUP_INTERVAL_MINUTES = int(os.environ.get("MEDIA_CLEANUP_INTERVAL_MINUTES", 30))
+# Whether to run the background cleanup daemon automatically
+ENABLE_BACKGROUND_CLEANUP = os.environ.get("ENABLE_BACKGROUND_CLEANUP", "true").lower() in ("1", "true", "yes")
+
 # --- Excel Agent settings ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")

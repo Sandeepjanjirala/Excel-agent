@@ -64,3 +64,60 @@ answer = [math.sqrt(x) for x in df['a']]
             self.assertEqual(sheet.header_row_index, 2)
             self.assertGreaterEqual(sheet.n_cols, 50)
             self.assertEqual(sheet.n_rows, 15)
+
+    def test_cleanup_expired_session(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from agent.models import Project
+        from agent.services.cleanup import cleanup_expired_sessions, cleanup_project, get_storage_stats
+        from pathlib import Path
+
+        # Create a test project
+        project = Project.objects.create()
+        # Manually backdate created_at to 15 hours ago
+        Project.objects.filter(id=project.id).update(
+            created_at=timezone.now() - timedelta(hours=15)
+        )
+
+        # Create dummy parsed pickle file
+        parsed_dir = Path(settings.MEDIA_ROOT) / "parsed"
+        parsed_dir.mkdir(exist_ok=True)
+        test_pkl = parsed_dir / f"{project.id}.pkl"
+        test_pkl.write_bytes(b"dummy pickle content")
+        self.assertTrue(test_pkl.exists())
+
+        # Run cleanup with 12 hour threshold
+        result = cleanup_expired_sessions(retention_hours=12)
+        self.assertGreaterEqual(result["projects_deleted"], 1)
+        self.assertFalse(Project.objects.filter(id=project.id).exists())
+        self.assertFalse(test_pkl.exists())
+
+    def test_cleanup_recent_session_preserved(self):
+        from agent.models import Project
+        from agent.services.cleanup import cleanup_expired_sessions
+        from pathlib import Path
+
+        # Fresh project (now)
+        fresh_project = Project.objects.create()
+        parsed_dir = Path(settings.MEDIA_ROOT) / "parsed"
+        parsed_dir.mkdir(exist_ok=True)
+        test_pkl = parsed_dir / f"{fresh_project.id}.pkl"
+        test_pkl.write_bytes(b"dummy fresh content")
+
+        try:
+            cleanup_expired_sessions(retention_hours=12)
+            # Must still exist because it was created now (< 12 hours)
+            self.assertTrue(Project.objects.filter(id=fresh_project.id).exists())
+            self.assertTrue(test_pkl.exists())
+        finally:
+            fresh_project.delete()
+            test_pkl.unlink(missing_ok=True)
+
+    def test_storage_stats(self):
+        from agent.services.cleanup import get_storage_stats
+        stats = get_storage_stats()
+        self.assertIn("total_files", stats)
+        self.assertIn("total_size_mb", stats)
+        self.assertIn("categories", stats)
+        self.assertIn("workbooks", stats["categories"])
+

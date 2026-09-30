@@ -10,7 +10,9 @@ from django.views.decorators.http import require_http_methods
 
 from .models import Project, ExcelFile, ChatMessage
 from .services.excel_parser import parse_workbook, schema_summary_text, build_batch
+from .services.rules_extractor import extract_rules_text
 from .services.graph import answer_question
+from .services.cleanup import trigger_background_cleanup_if_due
 
 PARSED_DIR = Path(settings.MEDIA_ROOT) / "parsed"
 PARSED_DIR.mkdir(exist_ok=True)
@@ -19,7 +21,11 @@ MAX_FILES_PER_UPLOAD = 25  # generous headroom above the ~15 files you're using
 
 
 def index(request):
-    return render(request, "agent/index.html")
+    response = render(request, "agent/index.html")
+    response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response["Pragma"] = "no-cache"
+    response["Expires"] = "0"
+    return response
 
 
 @csrf_exempt
@@ -28,10 +34,14 @@ def upload_project(request):
     """
     Accepts any number of Excel files (field name "excel_files", repeated)
     plus one optional shared metadata/business-rules file (field name
-    "metadata_file", a .md/.txt). Files are NOT assumed to share a schema.
+    "metadata_file", supporting .xlsx, .xls, .pdf, .png, .jpg, .md, .txt, .csv).
     """
     excel_files = request.FILES.getlist("excel_files")
-    metadata_file = request.FILES.get("metadata_file")  # optional .md
+    metadata_file = request.FILES.get("metadata_file")
+    user_api_key = request.POST.get("gemini_api_key") or None
+
+    # Trigger lazy background cleanup if due to keep media storage lean
+    trigger_background_cleanup_if_due()
 
     if not excel_files:
         return JsonResponse({"error": "No Excel files provided."}, status=400)
@@ -41,60 +51,92 @@ def upload_project(request):
             status=400,
         )
 
-    project = Project.objects.create(metadata_file=metadata_file)
+    try:
+        project = Project.objects.create(metadata_file=metadata_file)
 
-    if metadata_file:
-        project.metadata_file.open("rb")
-        try:
-            project.business_rules_text = project.metadata_file.read().decode("utf-8", errors="ignore")
-        finally:
-            project.metadata_file.close()
+        if metadata_file:
+            project.metadata_file.open("rb")
+            try:
+                project.business_rules_text = extract_rules_text(
+                    project.metadata_file,
+                    filename=metadata_file.name,
+                    api_key=user_api_key,
+                )
+            finally:
+                project.metadata_file.close()
+            project.save()
+
+        parsed_for_batch = []  # [(original_name, ParsedWorkbook), ...]
+        file_records = []
+        errors = []
+
+        for uploaded in excel_files:
+            ef = ExcelFile.objects.create(project=project, file=uploaded, original_name=uploaded.name)
+            try:
+                parsed = parse_workbook(ef.file.path)
+            except Exception as e:
+                errors.append(f"{uploaded.name}: could not read file ({e})")
+                ef.delete()
+                continue
+
+            ef.schema_text = schema_summary_text(parsed)
+            ef.save()
+            parsed_for_batch.append((uploaded.name, parsed))
+            file_records.append(ef)
+
+        if not parsed_for_batch:
+            project.delete()
+            return JsonResponse({"error": "None of the uploaded files could be read.", "details": errors}, status=400)
+
+        var_map, combined_schema, file_vars = build_batch(parsed_for_batch)
+
+        with open(PARSED_DIR / f"{project.id}.pkl", "wb") as f:
+            pickle.dump(var_map, f)
+
+        project.schema_text = combined_schema
         project.save()
 
-    parsed_for_batch = []  # [(original_name, ParsedWorkbook), ...]
-    file_records = []
-    errors = []
+        files_info = []
+        total_rows = 0
+        total_sheets = 0
+        for (orig_name, parsed), ef, v_list in zip(parsed_for_batch, file_records, file_vars):
+            sheets_data = []
+            for s_name, s_info in parsed.sheets.items():
+                total_sheets += 1
+                total_rows += int(s_info.n_rows)
+                col_names = [str(c) for c in s_info.columns]
+                sheets_data.append({
+                    "sheet_name": str(s_name),
+                    "variable": v_list[0] if len(v_list) == 1 else f"{orig_name}__{s_name}",
+                    "rows": int(s_info.n_rows),
+                    "cols": int(s_info.n_cols),
+                    "columns": col_names[:50],
+                    "total_columns": len(col_names),
+                    "banner_detected": bool(s_info.header_row_index > 0),
+                })
+            files_info.append({
+                "name": str(orig_name),
+                "variables": v_list,
+                "sheets": sheets_data,
+            })
 
-    for uploaded in excel_files:
-        ef = ExcelFile.objects.create(project=project, file=uploaded, original_name=uploaded.name)
-        try:
-            parsed = parse_workbook(ef.file.path)
-        except Exception as e:
-            errors.append(f"{uploaded.name}: could not read file ({e})")
-            ef.delete()
-            continue
+        response = {
+            "project_id": str(project.id),
+            "files": files_info,
+            "variables": list(var_map.keys()),
+            "total_files": len(files_info),
+            "total_sheets": total_sheets,
+            "total_rows": total_rows,
+            "schema_preview": combined_schema,
+            "has_metadata": bool(metadata_file),
+            "metadata_name": metadata_file.name if metadata_file else None,
+        }
+        if errors:
+            response["warnings"] = errors
 
-        ef.schema_text = schema_summary_text(parsed)
-        ef.save()
-        parsed_for_batch.append((uploaded.name, parsed))
-        file_records.append(ef)
-
-    if not parsed_for_batch:
-        project.delete()
-        return JsonResponse({"error": "None of the uploaded files could be read.", "details": errors}, status=400)
-
-    var_map, combined_schema, file_vars = build_batch(parsed_for_batch)
-
-    with open(PARSED_DIR / f"{project.id}.pkl", "wb") as f:
-        pickle.dump(var_map, f)
-
-    project.schema_text = combined_schema
-    project.save()
-
-    response = {
-        "project_id": str(project.id),
-        "files": [
-            {"name": ef.original_name, "variables": vars_for_file}
-            for ef, vars_for_file in zip(file_records, file_vars)
-        ],
-        "variables": list(var_map.keys()),
-        "schema_preview": combined_schema[:4000],
-        "has_metadata": bool(metadata_file),
-    }
-    if errors:
-        response["warnings"] = errors
-
-    return JsonResponse(response)
+        return JsonResponse(response)
+    except Exception as e:
+        return JsonResponse({"error": f"Error processing Excel files: {e}"}, status=400)
 
 
 @csrf_exempt
@@ -147,3 +189,32 @@ def ask_question(request):
     )
 
     return JsonResponse(result)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def delete_project(request):
+    """
+    Explicitly delete a project and all associated media files immediately.
+    """
+    try:
+        body = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
+
+    project_id = body.get("project_id")
+    if not project_id:
+        return JsonResponse({"error": "project_id is required."}, status=400)
+
+    from .services.cleanup import cleanup_project
+    deleted = cleanup_project(project_id)
+    return JsonResponse({"status": "ok", "deleted": deleted, "project_id": str(project_id)})
+
+
+@require_http_methods(["GET"])
+def storage_stats_view(request):
+    """
+    Inspect current disk usage and file counts for the media directory.
+    """
+    from .services.cleanup import get_storage_stats
+    return JsonResponse(get_storage_stats())

@@ -136,12 +136,37 @@ excel_agent/
     static/agent/{css,js}   jQuery chat UI
 ```
 
+## Ephemeral Storage & 12-Hour Auto-Cleanup Architecture
+
+By design, spreadsheets uploaded to the agent are treated as ephemeral workspace data rather than permanent storage:
+
+- **12-Hour Auto-Expiration**: Uploaded spreadsheets, extracted metadata, parsed DataFrame pickles (`media/parsed/*.pkl`), and database records automatically expire and get purged after 12 hours (configurable via `MEDIA_RETENTION_HOURS` in `.env`).
+- **Multi-Pronged Execution Engine**:
+  1. **Background Daemon Worker**: A lightweight background daemon thread (`agent/cleanup_daemon.py`) runs periodically (every 30 mins) while the Django server is running to sweep expired data.
+  2. **Lazy Request Fallback**: Incoming upload requests trigger a throttled check (`agent/services/cleanup.py`), guaranteeing stale sessions get cleaned even in environments without long-running background threads.
+  3. **Instant "New Session" Cleanup**: Clicking **New Session** in the UI immediately notifies `/api/project/delete/` to free disk space immediately without waiting 12 hours.
+  4. **Post-Delete Cascade Signals**: Django `post_delete` signals on `Project` and `ExcelFile` ensure deleting database records automatically unlinks all raw `.xlsx`, metadata, and `.pkl` files on disk.
+  5. **Orphan File Sweeper**: Automatically discovers and purges any unreferenced files in `media/workbooks`, `media/metadata`, or `media/parsed` that exceed the retention cutoff.
+- **Management CLI Command**:
+  ```bash
+  # Check current disk usage and file breakdown
+  python manage.py cleanup_media --stats
+
+  # Run cleanup with default 12-hour threshold
+  python manage.py cleanup_media
+
+  # Run cleanup with custom hours or dry-run preview
+  python manage.py cleanup_media --hours 6 --dry-run
+
+  # Force purge all media and sessions immediately
+  python manage.py cleanup_media --all
+  ```
+
 ## Known limitations / next steps
 
 - Uploaded workbooks are parsed once and cached as a pickle on disk
-  (`media/parsed/<id>.pkl`) for fast repeat questions — fine for a single
-  server, but you'd move this to a proper cache/object store for multiple
-  workers.
+  (`media/parsed/<id>.pkl`) for fast repeat questions, and auto-purged after 12 hours.
+  For distributed multi-server deployments, swap local disk pickles for Redis or S3 with lifecycle rules.
 - CSRF is currently exempted on the two API views for simplicity; before
   any public deployment, wire up Django's CSRF token in the jQuery AJAX
   calls instead of exempting the views.

@@ -3,46 +3,364 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Excel Agent</title>
-  <link rel="stylesheet" href="{% static 'agent/css/style.css' %}">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Excel Agent — AI Spreadsheet Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'agent/css/style.css' %}?v=2.5">
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Excel Agent</h1>
-    <p class="sub">Upload one or more Excel files (they don't need to share the same layout), optionally with one shared Markdown file of notes / business rules, then ask questions across all of them.</p>
+  <!-- Top Navigation Header -->
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="8" y1="13" x2="16" y2="13"></line>
+            <line x1="8" y1="17" x2="16" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <div class="brand-title">
+            Excel Agent
+            <span class="brand-badge">Gemini 3.8</span>
+          </div>
+          <div class="brand-sub">Spreadsheet Analytics &amp; Query Engine</div>
+        </div>
+      </div>
 
-    <div class="upload-card" id="upload-card">
-      <label class="file-label">
-        Your Gemini API key (optional)
-        <input type="password" id="gemini-key-input" placeholder="Leave blank to use this server's default key">
-        <span class="hint">Stored only in your browser (localStorage) and sent with your own questions - never saved on the server or shown to other users. Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</span>
-      </label>
+      <div class="header-actions">
+        <button type="button" class="btn-ghost" id="open-key-modal-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 2l-2 2m-1-1l-3 3m5 0l-3 3m-4.5-1.5L4 16.5V20h3.5l9.5-9.5z"></path>
+          </svg>
+          <span id="api-key-status-label">API Key</span>
+          <span class="status-dot" id="api-key-dot" title="Server key active"></span>
+        </button>
 
-      <label class="file-label">
-        Excel files (.xlsx) — select as many as you need
-        <input type="file" id="excel-files" accept=".xlsx,.xls" multiple>
-      </label>
-      <label class="file-label">
-        Shared metadata / business rules (.md) — optional, applies loosely across all files
-        <input type="file" id="metadata-file" accept=".md,.txt">
-      </label>
-      <button id="upload-btn">Upload &amp; Parse</button>
-      <div id="upload-status"></div>
-      <ul id="file-list"></ul>
+        <button type="button" class="btn-ghost" id="new-session-btn" title="Reset current workspace">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+          </svg>
+          <span>New Session</span>
+        </button>
+      </div>
     </div>
+  </header>
 
-    <div class="chat-card" id="chat-card" style="display:none;">
-      <div id="schema-preview"></div>
-      <div id="messages"></div>
-      <div class="input-row">
-        <input type="text" id="question-input" placeholder="Ask a question about your data..." disabled>
-        <button id="ask-btn" disabled>Ask</button>
+  <!-- Main Application Workspace -->
+  <main class="app-workspace">
+    
+    <!-- LEFT SIDEBAR: Upload & Dataset Hub -->
+    <aside class="sidebar-panel">
+      
+      <!-- Upload Card -->
+      <section class="card upload-section">
+        <div class="section-title-row">
+          <div class="title-with-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="17 8 12 3 7 8"></polyline>
+              <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+            <h2>Upload Spreadsheets</h2>
+          </div>
+          <span class="counter-badge" id="upload-count-badge">0 files</span>
+        </div>
+        <p class="section-desc">Supports multiple Excel workbooks (.xlsx, .xls). Each sheet is automatically parsed and mapped.</p>
+        <div class="retention-pill" title="For privacy and storage efficiency, uploaded workbooks, parsed caches, and sessions are automatically purged after 12 hours.">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          <span>Ephemeral: Uploaded datasets auto-expire after 12 hours</span>
+        </div>
+
+        <!-- Drag & Drop Zone -->
+        <div class="drop-zone" id="drop-zone">
+          <input type="file" id="excel-files" accept=".xlsx,.xls" multiple class="drop-zone-input" title="Choose Excel files or drag and drop">
+          <div class="drop-zone-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
+              <path d="M12 12v9"></path>
+              <path d="m16 16-4-4-4 4"></path>
+            </svg>
+          </div>
+          <div class="drop-zone-text">
+            <strong>Choose Excel files</strong> or drag &amp; drop
+          </div>
+          <div class="drop-zone-hint">.xlsx or .xls (up to 25 files)</div>
+        </div>
+
+        <!-- Selected Excel Files List -->
+        <div class="selected-files-list" id="selected-files-list" style="display:none;"></div>
+
+        <!-- Optional Business Rules Accordion -->
+        <details class="rules-accordion">
+          <summary>
+            <div class="summary-left">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+              </svg>
+              <span>Business Rules / Reference File</span>
+            </div>
+            <span class="tag-optional">Optional</span>
+          </summary>
+          <div class="rules-body">
+            <p class="rules-hint">Upload formulas, reference tables, or KPI guides. Supports <strong>Excel (.xlsx, .xls), PDF (.pdf), Images (.png, .jpg), and Markdown/Text (.md, .txt, .csv)</strong>.</p>
+            <label class="custom-file-upload">
+              <input type="file" id="metadata-file" accept=".xlsx,.xls,.pdf,.png,.jpg,.jpeg,.webp,.md,.txt,.csv" class="sr-only">
+              <span class="file-pick-btn">Choose file</span>
+              <span class="file-pick-name" id="metadata-filename">No file selected</span>
+            </label>
+          </div>
+        </details>
+
+        <!-- Upload Action Button -->
+        <button type="button" id="upload-btn" class="btn-primary" disabled>
+          <span class="btn-spinner" id="upload-spinner" style="display:none;"></span>
+          <span class="btn-text">Parse &amp; Load Dataset</span>
+        </button>
+
+        <div id="upload-status" class="status-message"></div>
+      </section>
+
+      <!-- Dataset Overview Panel (Populated after successful upload) -->
+      <section class="card dataset-section" id="dataset-panel" style="display:none;">
+        <div class="section-title-row">
+          <div class="title-with-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+            </svg>
+            <h2>Active Data Batch</h2>
+          </div>
+          <span class="status-pill status-ready">Indexed</span>
+        </div>
+
+        <!-- Quick Metrics -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-val" id="stat-files">0</div>
+            <div class="metric-label">Files</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val" id="stat-sheets">0</div>
+            <div class="metric-label">Sheets</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val" id="stat-rows">0</div>
+            <div class="metric-label">Total Rows</div>
+          </div>
+        </div>
+
+        <!-- File & Sheet Cards Container -->
+        <div class="file-cards-container" id="file-cards-container"></div>
+
+        <!-- Technical Schema Inspector (Clean collapsible for advanced use) -->
+        <details class="schema-inspect-accordion">
+          <summary>
+            <span>View Technical Schema Definition</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </summary>
+          <div class="schema-inspect-body">
+            <pre><code id="schema-debug-text"></code></pre>
+          </div>
+        </details>
+      </section>
+
+    </aside>
+
+    <!-- RIGHT PANEL: Intelligent Chat & Analysis Stream -->
+    <section class="chat-panel">
+      <div class="chat-card-container">
+        
+        <!-- Chat Header Bar -->
+        <div class="chat-header">
+          <div class="chat-header-title">
+            <div class="agent-avatar-sm">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"></path>
+              </svg>
+            </div>
+            <div>
+              <h3>AI Data Analyst</h3>
+              <p id="chat-subhead">Upload Excel files to begin querying</p>
+            </div>
+          </div>
+          <div class="chat-header-controls">
+            <button type="button" class="btn-icon" id="clear-chat-btn" title="Clear chat history" style="display:none;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Messages Area -->
+        <div class="chat-scroll-view" id="messages-container">
+          
+          <!-- Welcoming Empty State -->
+          <div class="empty-state" id="empty-state">
+            <div class="empty-state-icon">
+              <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="3" y1="9" x2="21" y2="9"></line>
+                <line x1="9" y1="21" x2="9" y2="9"></line>
+              </svg>
+            </div>
+            <h2>Spreadsheet Query &amp; Insights Engine</h2>
+            <p>Upload one or more Excel sheets to begin. The agent automatically detects schemas, handles multi-table relationships, writes sandboxed Pandas Python queries, and verifies answers.</p>
+
+            <div class="features-list">
+              <div class="feature-item">
+                <span class="f-icon">⚡</span>
+                <div>
+                  <strong>Sandboxed Execution</strong>
+                  <p>Generates and executes Pandas queries safely with automated self-correction.</p>
+                </div>
+              </div>
+              <div class="feature-item">
+                <span class="f-icon">🔗</span>
+                <div>
+                  <strong>Cross-File Joins</strong>
+                  <p>Accurately merges multi-sheet files even when schemas differ or have banner rows.</p>
+                </div>
+              </div>
+              <div class="feature-item">
+                <span class="f-icon">📊</span>
+                <div>
+                  <strong>Deep Profiling</strong>
+                  <p>Analyzes value distributions, categorical domains, and numeric ranges.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Dynamic Chat Message Feed -->
+          <div class="messages-feed" id="messages"></div>
+
+          <!-- Quick Suggestion Chips (Visible once files are loaded) -->
+          <div class="suggestions-wrapper" id="suggestions-box" style="display:none;">
+            <div class="suggestions-label">Suggested Inquiries:</div>
+            <div class="suggestions-chips" id="suggestions-chips">
+              <button type="button" class="chip-btn" data-query="How many total records are there in the uploaded data?">
+                📊 Total record count
+              </button>
+              <button type="button" class="chip-btn" data-query="Summarize the key columns, unique categories, and sample values.">
+                📋 Summarize key columns
+              </button>
+              <button type="button" class="chip-btn" data-query="Are there any missing or null values in important fields?">
+                🔍 Check for missing values
+              </button>
+              <button type="button" class="chip-btn" data-query="Group the records by the primary category or branch and show counts.">
+                📈 Group by category / branch
+              </button>
+            </div>
+          </div>
+
+          <!-- Processing / Thinking Indicator -->
+          <div class="typing-indicator" id="typing-indicator" style="display:none;">
+            <div class="typing-avatar">
+              <div class="pulse-ring"></div>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M12 6v6l4 2"></path>
+              </svg>
+            </div>
+            <div class="typing-content">
+              <div class="typing-header">Agent is working...</div>
+              <div class="typing-status-text" id="typing-status">Analyzing dataset and generating Pandas code</div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Chat Input Dock -->
+        <div class="chat-input-dock">
+          <div class="input-container">
+            <textarea 
+              id="question-input" 
+              rows="1" 
+              placeholder="Upload Excel files to ask questions..." 
+              disabled
+            ></textarea>
+            <button type="button" id="ask-btn" class="send-btn" disabled title="Send question">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
+          </div>
+          <div class="input-helper">
+            <span>Press <kbd>Enter ↵</kbd> to send &bull; <kbd>Shift + Enter</kbd> for new line</span>
+            <span id="session-tag" class="session-tag">No dataset loaded</span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Gemini API Key Modal -->
+  <div class="modal-backdrop" id="key-modal" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 2l-2 2m-1-1l-3 3m5 0l-3 3m-4.5-1.5L4 16.5V20h3.5l9.5-9.5z"></path>
+          </svg>
+          <h3>Gemini API Key</h3>
+        </div>
+        <button type="button" class="btn-close" id="close-key-modal-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          By default, queries use the server's configured environment key. If you have your own Google Gemini API key or want higher rate limits, enter it below.
+        </p>
+
+        <label class="modal-field-label">
+          <span>API Key</span>
+          <div class="password-wrapper">
+            <input type="password" id="gemini-key-input" placeholder="AIzaSy..." autocomplete="off">
+            <button type="button" class="btn-toggle-eye" id="toggle-key-visibility" title="Show/Hide">
+              👁️
+            </button>
+          </div>
+        </label>
+
+        <div class="modal-privacy-callout">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          <span>Stored strictly in your local browser storage. It is never logged or stored in the database.</span>
+        </div>
+
+        <div class="modal-link-row">
+          <span>Need an API key?</span>
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Get one free at Google AI Studio &rarr;</a>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" id="clear-key-btn">Use Server Default</button>
+        <button type="button" class="btn-primary" id="save-key-btn">Save Key</button>
       </div>
     </div>
   </div>
 
-  <script src="{% static 'agent/js/chat.js' %}"></script>
+  <script src="{% static 'agent/js/chat.js' %}?v=2.4"></script>
 </body>
 </html>
