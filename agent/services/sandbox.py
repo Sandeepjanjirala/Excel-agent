@@ -147,6 +147,17 @@ _SAFE_BUILTINS = {
 }
 
 
+def _restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
+    """What an `import` statement in generated code calls: only the modules _validate_ast allows,
+    and never a relative import. Without it every `import`, even `import math`, fails at run time."""
+    if level != 0 or name.split(".")[0] not in _SAFE_MODULES:
+        raise ImportError(f"Importing '{name}' is not allowed.")
+    return builtins.__import__(name, globals, locals, fromlist, level)
+
+
+_SAFE_BUILTINS["__import__"] = _restricted_import
+
+
 def _run_in_process(code: str, dataframes: dict, result_queue):
     try:
         prepared_code = _auto_assign_answer(code)
