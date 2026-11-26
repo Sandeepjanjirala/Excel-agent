@@ -31,6 +31,14 @@ answer = [math.sqrt(x) for x in df['a']]
         self.assertEqual(status, "ok")
         self.assertEqual(res, [2.0, 3.0, 4.0])
 
+    def test_imports_outside_the_allow_list_are_refused(self):
+        df = pd.DataFrame({"a": [1]})
+        for code in ("import os\nanswer = 1", "import subprocess\nanswer = 1",
+                     "from . import x\nanswer = 1", "answer = __import__('os')"):
+            with self.subTest(code=code):
+                status, _ = run_pandas_snippet(code, {"df": df})
+                self.assertEqual(status, "error")
+
     def test_ifexp_ternary(self):
         df = pd.DataFrame({"val": [10, 20]})
         code = "answer = 'high' if df['val'].max() > 15 else 'low'"

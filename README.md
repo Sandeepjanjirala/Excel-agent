@@ -12,7 +12,7 @@ ranks, percentages) — the model can misread numbers or silently make
 arithmetic mistakes, especially as the sheet gets larger.
 
 Instead, this agent asks Gemini to **write pandas code**, then runs that
-code in a locked-down sandbox against the *real* dataframe. The number
+code in a restricted executor (see *Safety* below) against the *real* dataframe. The number
 you get back was computed by pandas, not guessed by the model. Gemini's
 second job is just to phrase the already-computed result in plain English.
 
@@ -175,3 +175,7 @@ By design, spreadsheets uploaded to the agent are treated as ephemeral workspace
   own machine.
 - `ALLOWED_HOSTS = ['*']` and `DEBUG = True` are dev-only settings in
   `excel_agent_site/settings.py` — lock these down for production.
+
+## License
+
+[MIT](LICENSE).
